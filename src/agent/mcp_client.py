@@ -8,7 +8,7 @@ from mcp.client.stdio import stdio_client
 # Using async anthropic client for better performance
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
-s
+
 # load the API key from .env file
 load_dotenv()
 
