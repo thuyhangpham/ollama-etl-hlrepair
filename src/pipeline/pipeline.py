@@ -23,32 +23,24 @@ class Pipeline:
         self.error_delay = error_delay
 
     def _initialize(self):
-        # Create transform function
-        transform = self.transformer.create()
+        # KHÔNG load transform ở đây nữa
+        # transform = self.transformer.create() <-- XÓA DÒNG NÀY
+        
+        logging.info("Pipeline initialized in Hot-Reload mode.")
 
         def wrapped_callback(message):
             parsed_message = self.subscriber.parse_message(message)
 
             try:
-                transformed_data = transform(parsed_message)
+                # CÁCH 2: Luôn load code mới nhất trước khi chạy
+                # Điều này đảm bảo nếu Agent vừa sửa file, ta sẽ chạy code mới ngay
+                current_transform_func = self.transformer.create()
+                
+                # Chạy transform
+                transformed_data = current_transform_func(parsed_message)
+                
             except Exception as e:
-                logging.error(f"Transformation error: {e}")
-                self.agent_hook.call_agent_hook(
-                    error=str(e),
-                    payload_data=parsed_message
-                )
-
-                if self.error_delay < 0:
-                    # infinite wait
-                    time.sleep(10**9)
-                elif self.error_delay > 0:
-                    time.sleep(self.error_delay)
-                self.subscriber.handle_error_message(message)
-                return
-            
-            try:
-                self.loader.load(transformed_data)
-            except Exception as e:
+                # ... (Logic xử lý)
                 logging.error(f"Loading error: {e}")
                 self.subscriber.handle_error_message(message)
                 return

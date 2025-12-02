@@ -1,17 +1,11 @@
-# Use an official Python runtime as a parent image
-FROM python:3.12-slim
+# Dùng python slim cho nhẹ
+FROM python:3.10-slim
 
-# Set the working directory to /app
 WORKDIR /app
 
-# Copy the requirements into the container at /app
-COPY requirements.txt /app
+# Cài đặt các thư viện cần thiết
+# Chúng ta cài trực tiếp để đỡ phải tạo file requirements.txt lắt nhắt
+RUN pip install --no-cache-dir python-dotenv httpx
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy the app files to the container
-COPY . /app
-
-# Run app.py when the container launches
+# Lệnh chạy mặc định
 CMD ["python", "main.py"]

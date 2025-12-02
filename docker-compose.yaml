@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  # Service 1: ETL Pipeline
+  etl:
+    build:
+      context: .
+      dockerfile: src/pipeline/Dockerfile
+    container_name: etl_pipeline
+    volumes:
+      # Mount code nguồn để ETL đọc được function.py mới nhất
+      - ./src/pipeline:/app
+      # Mount thư mục queue và output để tạo file json
+      - ./queue:/app/queue
+      - ./output:/app/output
+    environment:
+      - AGENT_SERVICE_URL=http://agent:5000/transformation_error
+      - QUEUE_FILE_PATH=/app/queue/messages.json
+      - OUTPUT_FILE_PATH=/app/output/data_warehouse.jsonl
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - agent
+
+  # Service 2: AI Agent
+  agent:
+    build:
+      context: .
+      dockerfile: src/agent/Dockerfile
+    container_name: ai_agent
+    volumes:
+      # Mount code của agent
+      - ./src/agent:/app
+      # QUAN TRỌNG: Mount file function.py của ETL vào Agent để Agent có thể sửa nó
+      - ./src/pipeline/function.py:/app/function.py
+    environment:
+      # Dùng host.docker.internal để gọi Ollama đang chạy trên máy tính của bạn
+      - OLLAMA_URL=http://host.docker.internal:11434/api/generate
+      - OLLAMA_MODEL=llama3  # Đổi model nếu bạn pull cái khác (vd: mistral)
+      - FUNCTION_FILE_PATH=/app/function.py
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "5000:5000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

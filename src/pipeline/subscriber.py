@@ -1,100 +1,101 @@
 import logging
-import boto3
 import json
-from typing import Any
-from google.cloud import pubsub_v1
-from typing import Callable, Optional
-from botocore.exceptions import ClientError
+import time
+import os
+from typing import Any, Callable, Optional, List
 
+# --- CLASS GIẢ LẬP MESSAGE CỦA PUBSUB ---
+class MockMessage:
+    """
+    Class này giả lập behavior của Google Pub/Sub Message.
+    Giúp logic chính không bị lỗi khi gọi .ack() hoặc .data
+    """
+    def __init__(self, data_dict: dict):
+        # PubSub trả về data dưới dạng bytes, nên ta encode lại
+        self.data = json.dumps(data_dict).encode("utf-8")
 
+    def ack(self):
+        # Ở local file, việc lấy message ra khỏi list đã coi như là ack rồi
+        logging.info("MockMessage: Acknowledged (Auto-removed from queue file)")
+
+# --- BASE CLASS (GIỮ NGUYÊN) ---
 class Subscriber:
     def __init__(self):
-        """
-        Base class for message consumers.
-
-        :param callback: Callable that will process each message.
-        """
         raise NotImplementedError("This class should not be instantiated directly. Use a subclass instead.")
     
     def subscribe(self, callback: Callable) -> None:
-        """
-        Subscribe to a message queue or topic.
-        To be implemented in subclass.
-
-        :param callback: A callable that will process each message.
-        """
         raise NotImplementedError("The 'subscribe' method must be implemented in the subclass.")
     
     def parse_message(self, message: Any) -> dict:
-        """
-        Parse the message into a dictionary.
-        This method should be overridden in subclasses if needed.
-
-        :param message: The message to be parsed.
-        :return: Parsed message as a dictionary.
-        """
-        raise NotImplementedError("The 'parse_message' method is not implemented in the base class. Use a subclass if needed.")
+        raise NotImplementedError("The 'parse_message' method is not implemented in the base class.")
     
     def acknowledge_message(self, message: Any) -> None:
-        """
-        Acknowledge the message to mark it as processed.
-        This method is not implemented in the base class.
-
-        :param message: The message to be acknowledged.
-        """
-        raise NotImplementedError("The 'acknowledge_message' method is not implemented in the base class. Use a subclass if needed.")
+        raise NotImplementedError("The 'acknowledge_message' method is not implemented in the base class.")
     
     def handle_error_message(self, message: Any) -> None:
-        """
-        Publish a message to the topic or queue.
-        This method is not implemented in the base class.
+        raise NotImplementedError("The 'handle_error_message' method is not implemented in the base class.")
 
-        :param message: The message to be published.
+# --- LOCAL FILE SUBSCRIBER (THAY THẾ PUBSUB) ---
+class LocalFileSubscriber(Subscriber):
+    def __init__(self, queue_file_path: str = "queue/messages.json", timeout: Optional[int] = None):
         """
-        raise NotImplementedError("The 'handle_error_message' method is not implemented in the base class. Use a subclass if needed.")
-    
-
-class PubSubSubscriber(Subscriber):
-    def __init__(self, project_id: str, subscription_id: str, topic_id: str, timeout: Optional[int] = None):
-        self.project_id = project_id
-        self.subscription_id = subscription_id
-        self.topic_id = topic_id
-        self.publisher = pubsub_v1.PublisherClient()
-        self.topic_path = self.publisher.topic_path(project_id, topic_id)
+        :param queue_file_path: Đường dẫn đến file JSON đóng vai trò là hàng đợi.
+        """
+        self.queue_file = queue_file_path
         self.timeout = timeout
+        
+        # Tạo file queue nếu chưa tồn tại
+        if not os.path.exists(self.queue_file):
+            os.makedirs(os.path.dirname(self.queue_file), exist_ok=True)
+            with open(self.queue_file, 'w') as f:
+                json.dump([], f)
 
     def subscribe(self, callback: Callable):
         """
-        Subscribe to a Google Cloud Pub/Sub subscription.
-
-        :param callback: A callable that will process each message.
+        Thay vì streaming từ Google, ta dùng vòng lặp để đọc file JSON.
         """
-        subscriber = pubsub_v1.SubscriberClient()
-        subscription_path = subscriber.subscription_path(self.project_id, self.subscription_id)
-
-        # Define flow control to limit concurrent messages
-        # for testing purposes, we set max_messages to 1
-        flow_control = pubsub_v1.types.FlowControl(
-            max_messages=1
-        )
-
-        streaming_pull_future = subscriber.subscribe(subscription_path, callback=callback, flow_control=flow_control)
-        logging.info(f"Listening for messages on {subscription_path}...")
-
-        with subscriber:
+        logging.info(f"Watching local file queue: {self.queue_file}...")
+        
+        while True:
             try:
-                streaming_pull_future.result(timeout=self.timeout)
+                # 1. Đọc file
+                if not os.path.exists(self.queue_file):
+                    time.sleep(1)
+                    continue
+
+                with open(self.queue_file, 'r') as f:
+                    try:
+                        messages = json.load(f)
+                    except json.JSONDecodeError:
+                        messages = []
+
+                # 2. Kiểm tra có tin nhắn không
+                if not messages:
+                    time.sleep(1) # Nghỉ 1 giây rồi quét tiếp
+                    continue
+
+                # 3. Lấy tin nhắn đầu tiên (FIFO)
+                raw_data = messages.pop(0)
+
+                # 4. Ghi lại file (đã loại bỏ tin nhắn vừa lấy)
+                # Đây là hành động mô phỏng việc "nhận" message
+                with open(self.queue_file, 'w') as f:
+                    json.dump(messages, f, indent=2)
+
+                # 5. Đóng gói vào MockMessage và gọi Callback
+                mock_msg = MockMessage(raw_data)
+                
+                # Gọi hàm xử lý logic chính (của ETL)
+                logging.info(f"Processing message: {raw_data}")
+                callback(mock_msg)
+
             except Exception as e:
-                logging.error(f"Error in streaming pull: {e}")
-                streaming_pull_future.cancel()
-                streaming_pull_future.result()
+                logging.error(f"Error in local file poll: {e}")
+                time.sleep(1)
 
-    def parse_message(self, message: pubsub_v1.subscriber.message.Message) -> dict:
+    def parse_message(self, message: MockMessage) -> dict:
         """
-        Parse the Pub/Sub message into a dictionary.
-
-        :param message: The Pub/Sub message to be parsed.
-        :return: Parsed message as a dictionary.
+        Giải mã message từ MockMessage (bytes -> dict)
         """
         try:
             return json.loads(message.data.decode("utf-8")) if message.data else {}
@@ -102,31 +103,43 @@ class PubSubSubscriber(Subscriber):
             logging.error(f"Failed to parse message: {e}")
             raise e
         
-    def acknowledge_message(self, message: pubsub_v1.subscriber.message.Message):
+    def acknowledge_message(self, message: MockMessage):
         """
-        Acknowledge the Pub/Sub message to mark it as processed.
-
-        :param message: The Pub/Sub message to be acknowledged.
+        Gọi hàm ack của MockMessage
         """
         try:
             message.ack()
-            logging.info("Message acknowledged successfully.")
         except Exception as e:
             logging.error(f"Failed to acknowledge message: {e}")
             raise e
 
-    def handle_error_message(self, message: pubsub_v1.subscriber.message.Message):
+    def handle_error_message(self, message: MockMessage):
         """
-        Handle error messages by publishing them to the topic.
-
-        :param message: The Pub/Sub message to be published.
+        Nếu lỗi, ta có thể ghi lại message vào cuối file queue (Re-queue)
         """
         try:
-            # Here you can implement your logic to handle error messages
-            logging.error(f"Handling error message: {message.data.decode('utf-8')}")
-            self.publisher.publish(self.topic_path, message.data)
-            message.ack()
+            logging.error("Handling error message - Re-queueing to file...")
+            
+            # Decode lại data để ghi vào JSON
+            data_dict = json.loads(message.data.decode("utf-8"))
+            
+            # Đọc queue hiện tại
+            current_messages = []
+            if os.path.exists(self.queue_file):
+                with open(self.queue_file, 'r') as f:
+                    try:
+                        current_messages = json.load(f)
+                    except:
+                        current_messages = []
+            
+            # Thêm lại vào cuối hàng đợi
+            current_messages.append(data_dict)
+            
+            with open(self.queue_file, 'w') as f:
+                json.dump(current_messages, f, indent=2)
+                
+            message.ack() # Ack để báo là đã xử lý việc lỗi xong
+            
         except Exception as e:
             logging.error(f"Failed to handle error message: {e}")
             raise e
-
