@@ -13,6 +13,7 @@ services:
       # Mount thư mục queue và output để tạo file json
       - ./queue:/app/queue
       - ./output:/app/output
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - AGENT_SERVICE_URL=http://agent:5000/transformation_error
       - QUEUE_FILE_PATH=/app/queue/messages.json

@@ -1,8 +1,9 @@
+# src/agent/Dockerfile
 FROM python:3.10-slim
 
+# Cài docker cli
+RUN apt-get update && apt-get install -y docker.io 
+
 WORKDIR /app
-
-# Cài đặt thư viện cho Agent (Quart là web framework async nhẹ)
-RUN pip install --no-cache-dir quart httpx python-dotenv
-
+RUN pip install quart httpx python-dotenv
 CMD ["python", "app.py"]
